@@ -1,6 +1,6 @@
 {
   "name": "@thenavidm/thrivecart-mcp-cli",
-  "version": "3.0.1",
+  "version": "3.0.1-cie.1",
   "description": "ThriveCart MCP server and CLI for Claude Code and AI agents. 24 tools for products, offers, transactions, revenue, customers, subscriptions and affiliates, across several carts at once.",
   "type": "module",
   "main": "./dist/index.js",
