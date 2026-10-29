@@ -24,6 +24,7 @@ import {
   filterByDate,
   filterByItemName,
   summariseByProduct,
+  transactionDate,
   transactionsFrom,
   type RawTransaction,
 } from "../format/transactions.js";
@@ -39,15 +40,24 @@ const dateArgs = {
  * Stops at `config.maxPages` so a server that keeps returning a full page
  * cannot spin here forever, and reports when it hit that ceiling rather than
  * quietly returning a partial total as if it were complete.
+ *
+ * ThriveCart takes no date filter, so with a `since` date the walk stops at
+ * the first page that reaches back past it. That holds only while the rows
+ * arrive newest first, so it is checked on every row: one row out of order and
+ * the walk falls back to every page. Without this a one-day query read the
+ * same 100 pages as an all-time one.
  */
-async function fetchAll(
+export async function fetchAll(
   client: ThriveCartClient,
   config: Config,
   account: Account,
   query: Record<string, unknown>,
+  since?: Date,
 ): Promise<{ rows: RawTransaction[]; truncated: boolean }> {
   const rows: RawTransaction[] = [];
   const perPage = 100;
+  let newestFirst = true;
+  let previous: Date | undefined;
 
   for (let page = 1; page <= config.maxPages; page++) {
     const payload = await client.get(account, "transactions", { ...query, page, perPage });
@@ -56,9 +66,25 @@ async function fetchAll(
     rows.push(...batch);
     // A short page is the last page. ThriveCart sends no total count.
     if (batch.length < perPage) return { rows, truncated: false };
+
+    if (!since) continue;
+    for (const row of batch) {
+      const at = transactionDate(row);
+      if (!at) continue;
+      if (previous && at > previous) newestFirst = false;
+      previous = at;
+    }
+    if (newestFirst && previous && previous < since) return { rows, truncated: false };
   }
 
   return { rows, truncated: true };
+}
+
+/** The start of `date_from` as `filterByDate` reads it, or undefined. */
+function startOf(dateFrom: string | undefined): Date | undefined {
+  if (!dateFrom) return undefined;
+  const start = new Date(dateFrom);
+  return Number.isNaN(start.getTime()) ? undefined : start;
 }
 
 const getTransactions = defineTool({
@@ -102,7 +128,7 @@ const getTransactions = defineTool({
     let truncated = false;
 
     if (fetch_all) {
-      const all = await fetchAll(ctx.client, ctx.config, target, query);
+      const all = await fetchAll(ctx.client, ctx.config, target, query, startOf(date_from));
       rows = all.rows;
       truncated = all.truncated;
     } else {
@@ -147,7 +173,7 @@ const getRevenueSummary = defineTool({
   risk: "read" as const,
   handler: async ({ date_from, date_to, account }, ctx) => {
     const target = ctx.account(account);
-    const { rows, truncated } = await fetchAll(ctx.client, ctx.config, target, {});
+    const { rows, truncated } = await fetchAll(ctx.client, ctx.config, target, {}, startOf(date_from));
     const inRange = filterByDate(rows, date_from, date_to);
     const { products, totalSales, totalRevenue } = summariseByProduct(inRange);
 
